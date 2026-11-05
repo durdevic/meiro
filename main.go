@@ -200,6 +200,7 @@ func (a *app) setup() {
 		a.openScrobbler(secretfile.File{Path: filepath.Join(directory, "lastfm-session.txt"), Keychain: mygo.Secrets, Name: credentialsKey}, filepath.Join(directory, "lastfm-pending.json"))
 		a.openCredits(filepath.Join(directory, "credits.json"))
 		a.openDownloads(filepath.Join(directory, "Downloads"))
+		a.openSpotifyLibrary(filepath.Join(directory, "spotify.json"))
 	} else {
 		a.account.signIn.err = err.Error()
 	}

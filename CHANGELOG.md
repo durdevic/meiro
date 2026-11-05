@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Spotify playlists stay inside Meiro.** They are copied in when you import them. Cover addresses are saved in that copy, so Meiro does not need to open your Downloads folder again. The original export is left where it was.
+
+### Fixed
+
+- **Saved Spotify covers show in the playlist.** A song that already has a cover address in its CSV shows that picture. Songs without one stay blank until they are played.
+
+### Added
+
+- **Spotify playlists play from YouTube Music.** Import a folder of Spotify CSV exports and they are kept on this computer. Opening one lists its songs, and Play searches YouTube Music for the song and plays the match. Later songs in the playlist are matched while the first one plays, and a match that already worked is reused next time.
+
 ## [0.6.1] - 2026-11-05
 
 ### Added

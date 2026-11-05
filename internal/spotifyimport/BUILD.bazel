@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "spotifyimport",
+    srcs = ["import.go"],
+    importpath = "github.com/elianiva/meiro/internal/spotifyimport",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/fsutil"],
+)
+
+go_test(
+    name = "spotifyimport_test",
+    srcs = ["import_test.go"],
+    embed = [":spotifyimport"],
+)

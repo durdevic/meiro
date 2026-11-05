@@ -162,6 +162,7 @@ type app struct {
 
 	// downloads is the music saved to play offline.
 	downloads downloads
+	spotify   spotifyState
 
 	// audioCache is the cache playback uses now; the settings page swaps it
 	// from the main thread while background work holds on to the one it

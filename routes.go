@@ -29,6 +29,8 @@ const (
 	routePlaylist
 	routeArtist
 	routePodcast
+	routeSpotify
+	routeSpotifyPlaylist
 )
 
 // loader reads a page's content. partial, when the loader can use it, shows
@@ -181,6 +183,15 @@ func appRoutes() []route {
 			load: func(ctx context.Context, c *youtube.Client, id string, _ func(*youtube.BrowseResult)) (*youtube.BrowseResult, error) {
 				return c.GetPodcast(ctx, id)
 			},
+		},
+		{
+			id: routeSpotify, pattern: "/spotify", title: "Spotify", heading: heading("Spotify"), nav: routeSpotify, source: "Spotify", bare: true,
+			rail: &railEntry{label: "Spotify", icon: m3.IconAlbum, filled: m3.IconAlbum},
+			view: (*app).spotifyPage, open: (*app).openSpotify,
+		},
+		{
+			id: routeSpotifyPlaylist, pattern: "/spotify/{id}", title: "Playlist", heading: heading("Spotify"), nav: routeSpotify, bare: true,
+			view: (*app).spotifyPlaylistPage, open: (*app).openSpotifyPlaylist,
 		},
 	}
 }

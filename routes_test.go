@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/elianiva/meiro/youtube"
@@ -22,15 +23,18 @@ func TestRouteTableIsComplete(t *testing.T) {
 			t.Errorf("%s has no heading", r.pattern)
 		}
 		id := ""
-		if r.isDetail() {
-			id = "MPREb a/b" // escaped in the path, and back
+		if strings.Contains(r.pattern, "{id}") {
+			id = "list-1"
+			if r.isDetail() {
+				id = "MPREb a/b" // escaped in the path, and back
+			}
 		}
 		got, gotID := matchRoute(r.path(id))
 		if got.id != r.id || gotID != id {
 			t.Errorf("%s leads to %s with id %q", r.path(id), got.pattern, gotID)
 		}
 	}
-	for id := routeNotFound + 1; id <= routeArtist; id++ {
+	for id := routeNotFound + 1; id <= routeSpotifyPlaylist; id++ {
 		if !seen[id] {
 			t.Errorf("route %d has no entry in routes", id)
 		}

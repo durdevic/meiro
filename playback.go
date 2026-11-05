@@ -125,6 +125,9 @@ func (a *app) playFromWithContinuation(item youtube.MusicItem, tracks []youtube.
 	if item.VideoID == "" {
 		return
 	}
+	// A song chosen somewhere else ends a Spotify playlist that is still
+	// being matched, so those matches are not added to the new queue.
+	a.stopSpotifyResolve()
 	a.queueRest.stop()
 	a.clearQueueSelection()
 	a.queue.replace(item, tracks, index, source)
@@ -542,6 +545,20 @@ func (a *app) trackEnded() {
 // advance plays the next track of the queue, waiting for recommendations at
 // its end when auto-play is on.
 func (a *app) advance() {
+	if a.spotify.resolving {
+		// Stay with the playlist being matched. Recommendations wait until
+		// that walk has finished, and until then the player holds at the end
+		// of the songs already found.
+		if next, ok := a.queue.nextEligible(false, repeatOff, a.settings.AutoSkipDisliked); ok {
+			a.startNext(a.queue.moveTo(next))
+			return
+		}
+		a.spotify.waiting = true
+		a.finishEpisodeProgress(false)
+		a.player.Stop()
+		a.syncSystemMedia()
+		return
+	}
 	if next, ok := a.queue.nextEligible(a.settings.AutoPlay, a.repeat, a.settings.AutoSkipDisliked); ok {
 		a.startNext(a.queue.moveTo(next))
 		return
