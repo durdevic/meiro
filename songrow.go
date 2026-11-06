@@ -179,6 +179,27 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 		if !main.FocusVisible() && !menuButton.FocusVisible() && !a.menu.opened(key) && (!hovered || o.list == "queue") {
 			menuButton.Opacity(0).PassThrough()
 		}
+		if isSong {
+			saved := a.isLocalSongSaved(item)
+			saveIcon := m3.IconAdd
+			saveLabel := "Save " + item.Title + " to library"
+			if saved {
+				saveIcon = m3.IconCheck
+				saveLabel = "Remove " + item.Title + " from library"
+			}
+			saveBtn := m3.IconButton(c, m3.IconButtonSpec{
+				Icon: saveIcon, Label: saveLabel, Key: key + "-save",
+				Container: menuContainer,
+			})
+			if saved {
+				saveBtn.TextColor(sc.Primary)
+			} else if !main.FocusVisible() && !saveBtn.FocusVisible() && !hovered {
+				saveBtn.Opacity(0).PassThrough()
+			}
+			if saveBtn.Clicked() {
+				a.toggleLocalSaveSong(item)
+			}
+		}
 	})
 	pointer := main.RightClicked() || menuButton.RightClicked()
 	if menuButton.Clicked() || pointer || main.Shortcut(ui.Shift, ui.KeyF10) {

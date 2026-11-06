@@ -259,6 +259,7 @@ go_test(
         "integration_test.go",
         "library_test.go",
         "like_test.go",
+        "local_save_test.go",
         "lyrics_test.go",
         "miniplayer_test.go",
         "playback_integration_test.go",

@@ -63,6 +63,12 @@ func (a *app) hero(c *ui.Context) {
 				if r.target != youtube.TargetPodcast && m3.Button(c, m3.ButtonSpec{Label: "Shuffle", Icon: m3.IconShuffle, Kind: m3.Tonal, Size: buttons, Disabled: none, Key: "hero-shuffle"}).Clicked() {
 					a.shufflePage()
 				}
+				if r.target == youtube.TargetPlaylist || r.target == youtube.TargetAlbum {
+					a.localSavePlaylistButton(c)
+				}
+				if r.target == youtube.TargetArtist {
+					a.localSaveArtistButton(c)
+				}
 				a.libraryButton(c)
 				a.downloadButton(c)
 				a.subscribeButton(c)
@@ -130,6 +136,28 @@ func (a *app) compactHeader(c *ui.Context, shown float32) {
 			if r.target != youtube.TargetPodcast {
 				if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconShuffle, Label: shuffleLabel, Kind: m3.StandardIcon, Size: m3.ExtraSmall32, Disabled: none, Key: "compact-shuffle"}).Clicked() {
 					a.shufflePage()
+				}
+			}
+			if r.target == youtube.TargetPlaylist || r.target == youtube.TargetAlbum {
+				title := a.page.detail.title
+				_, saved := a.isLocalPlaylistSaved(title)
+				icon, label := m3.IconAdd, "Save to library"
+				if saved {
+					icon, label = m3.IconCheck, "Saved to library"
+				}
+				if m3.IconButton(c, m3.IconButtonSpec{Icon: icon, Label: label, Kind: m3.StandardIcon, Size: m3.ExtraSmall32, Key: "compact-save"}).Clicked() {
+					a.toggleLocalSavePlaylist(title)
+				}
+			} else if r.target == youtube.TargetArtist {
+				name := a.page.detail.title
+				_, id := a.route()
+				saved := a.isLocalArtistSaved(name, id)
+				icon, label := m3.IconAdd, "Follow artist"
+				if saved {
+					icon, label = m3.IconCheck, "Following artist"
+				}
+				if m3.IconButton(c, m3.IconButtonSpec{Icon: icon, Label: label, Kind: m3.StandardIcon, Size: m3.ExtraSmall32, Key: "compact-follow"}).Clicked() {
+					a.toggleLocalSaveArtist(name, id, a.page.detail.art)
 				}
 			}
 			if state, id, ok := a.pageDownload(); ok {

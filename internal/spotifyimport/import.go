@@ -110,6 +110,63 @@ func (lib Library) PlaylistByID(id string) (Playlist, bool) {
 	return Playlist{}, false
 }
 
+// UsedIDs returns the set of all playlist IDs currently in lib.
+func (lib Library) UsedIDs() map[string]struct{} {
+	used := make(map[string]struct{}, len(lib.Playlists))
+	for _, p := range lib.Playlists {
+		used[p.ID] = struct{}{}
+	}
+	return used
+}
+
+// AddTrack adds track to playlist with filename, or creates the playlist if missing.
+func (lib *Library) AddTrack(filename, playlistName string, track Track) {
+	for i := range lib.Playlists {
+		if strings.EqualFold(lib.Playlists[i].File, filename) {
+			for _, t := range lib.Playlists[i].Tracks {
+				if (track.URI != "" && t.URI == track.URI) || (strings.EqualFold(t.Title, track.Title) && strings.EqualFold(t.Artists, track.Artists)) {
+					return
+				}
+			}
+			lib.Playlists[i].Tracks = append(lib.Playlists[i].Tracks, track)
+			return
+		}
+	}
+	used := lib.UsedIDs()
+	id := PlaylistID(filename, used)
+	lib.Playlists = append(lib.Playlists, Playlist{
+		ID:     id,
+		Name:   playlistName,
+		File:   filename,
+		Tracks: []Track{track},
+	})
+}
+
+// RemoveTrack removes a track matching URI or title/artist from the playlist with filename.
+func (lib *Library) RemoveTrack(filename, uri, title, artist string) {
+	for i := range lib.Playlists {
+		if !strings.EqualFold(lib.Playlists[i].File, filename) {
+			continue
+		}
+		tracks := lib.Playlists[i].Tracks[:0]
+		for _, t := range lib.Playlists[i].Tracks {
+			match := (uri != "" && t.URI == uri) || (strings.EqualFold(t.Title, title) && (artist == "" || strings.EqualFold(t.Artists, artist)))
+			if !match {
+				tracks = append(tracks, t)
+			}
+		}
+		lib.Playlists[i].Tracks = tracks
+		return
+	}
+}
+
+// RemovePlaylistByID removes the playlist with id.
+func (lib *Library) RemovePlaylistByID(id string) {
+	lib.Playlists = slices.DeleteFunc(lib.Playlists, func(p Playlist) bool {
+		return p.ID == id
+	})
+}
+
 // SetMatch stores the YouTube song and its cover for the track at index.
 func (lib *Library) SetMatch(playlistID string, index int, videoID, cover string) {
 	for i := range lib.Playlists {
@@ -202,9 +259,9 @@ func ImportDir(dir string, previous Library) (Library, int, error) {
 				tracks[i].VideoID = videoID
 			}
 		}
-		name := displayName(entry.Name())
+		name := DisplayName(entry.Name())
 		lib.Playlists = append(lib.Playlists, Playlist{
-			ID: playlistID(entry.Name(), used), Name: name, File: entry.Name(), Tracks: tracks,
+			ID: PlaylistID(entry.Name(), used), Name: name, File: entry.Name(), Tracks: tracks,
 		})
 	}
 	if len(lib.Playlists) == 0 {
@@ -307,7 +364,8 @@ func WriteCoverURL(path, trackURI, cover string) error {
 	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o644)
 }
 
-func playlistID(file string, used map[string]struct{}) string {
+// PlaylistID generates a short unique ID for a playlist file.
+func PlaylistID(file string, used map[string]struct{}) string {
 	sum := sha256.Sum256([]byte(file))
 	id := hex.EncodeToString(sum[:5])
 	for {
@@ -319,7 +377,8 @@ func playlistID(file string, used map[string]struct{}) string {
 	}
 }
 
-func displayName(file string) string {
+// DisplayName turns a file name like "Chill_Vibes.csv" into "Chill Vibes".
+func DisplayName(file string) string {
 	name := strings.TrimSuffix(file, filepath.Ext(file))
 	name = strings.ReplaceAll(name, "_", " ")
 	name = strings.TrimSpace(name)
@@ -327,6 +386,290 @@ func displayName(file string) string {
 		return "Untitled"
 	}
 	return name
+}
+
+// SanitizeFileName cleans a string so it is valid as a filename across platforms.
+func SanitizeFileName(name string) string {
+	name = strings.TrimSpace(name)
+	invalid := func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return '_'
+		}
+		if r < 32 {
+			return '_'
+		}
+		return r
+	}
+	clean := strings.Map(invalid, name)
+	clean = strings.Trim(clean, " ._")
+	if clean == "" {
+		return "Untitled"
+	}
+	return clean
+}
+
+// AppendTrack appends track to path. If the CSV file does not exist, it is created
+// with standard Spotify-compatible export columns.
+func AppendTrack(path string, track Track) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	var records [][]string
+	var header []string
+	cols := map[string]int{}
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		r := csv.NewReader(bytes.NewReader(data))
+		r.FieldsPerRecord = -1
+		r.LazyQuotes = true
+		records, _ = r.ReadAll()
+	}
+	if len(records) > 0 {
+		header = records[0]
+		for i, name := range header {
+			cols[strings.TrimPrefix(strings.TrimSpace(name), "\uFEFF")] = i
+		}
+	} else {
+		header = []string{"Track URI", "Track Name", "Album Name", "Artist Name(s)", "Release Date", "Duration (ms)", CoverColumn}
+		records = [][]string{header}
+		for i, name := range header {
+			cols[name] = i
+		}
+	}
+	uriCol, hasURI := cols["Track URI"]
+	titleCol, hasTitle := cols["Track Name"]
+	artistCol, hasArtist := cols["Artist Name(s)"]
+	albumCol, hasAlbum := cols["Album Name"]
+	durCol, hasDur := cols["Duration (ms)"]
+	coverCol, hasCover := cols[CoverColumn]
+	if !hasCover {
+		header = append(header, CoverColumn)
+		records[0] = header
+		coverCol = len(header) - 1
+		cols[CoverColumn] = coverCol
+		hasCover = true
+	}
+
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		if hasURI && track.URI != "" && field(row, uriCol) == track.URI {
+			return nil
+		}
+		if hasTitle && hasArtist && strings.EqualFold(field(row, titleCol), track.Title) && strings.EqualFold(field(row, artistCol), track.Artists) {
+			return nil
+		}
+	}
+
+	newRow := make([]string, len(header))
+	if hasURI {
+		newRow[uriCol] = track.URI
+	}
+	if hasTitle {
+		newRow[titleCol] = track.Title
+	}
+	if hasAlbum {
+		newRow[albumCol] = track.Album
+	}
+	if hasArtist {
+		newRow[artistCol] = track.Artists
+	}
+	if hasDur && track.DurationMs > 0 {
+		newRow[durCol] = strconv.Itoa(track.DurationMs)
+	}
+	if hasCover && track.Cover != "" {
+		newRow[coverCol] = track.Cover
+	}
+	records = append(records, newRow)
+
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := w.WriteAll(records); err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o644)
+}
+
+// RemoveTrack removes any track matching trackURI or title/artist from path.
+func RemoveTrack(path string, trackURI, title, artist string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	r := csv.NewReader(bytes.NewReader(data))
+	r.FieldsPerRecord = -1
+	r.LazyQuotes = true
+	records, err := r.ReadAll()
+	if err != nil {
+		return err
+	}
+	if len(records) <= 1 {
+		return nil
+	}
+	header := records[0]
+	cols := map[string]int{}
+	for i, name := range header {
+		cols[strings.TrimPrefix(strings.TrimSpace(name), "\uFEFF")] = i
+	}
+	uriCol, hasURI := cols["Track URI"]
+	titleCol, hasTitle := cols["Track Name"]
+	artistCol, hasArtist := cols["Artist Name(s)"]
+
+	out := records[:1]
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		match := false
+		if hasURI && trackURI != "" && field(row, uriCol) == trackURI {
+			match = true
+		} else if hasTitle && strings.EqualFold(field(row, titleCol), title) {
+			if artist == "" || !hasArtist || strings.EqualFold(field(row, artistCol), artist) {
+				match = true
+			}
+		}
+		if !match {
+			out = append(out, row)
+		}
+	}
+
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := w.WriteAll(out); err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o644)
+}
+
+// WritePlaylist writes a full playlist to path with standard Spotify export columns.
+func WritePlaylist(path string, tracks []Track) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	header := []string{"Track URI", "Track Name", "Album Name", "Artist Name(s)", "Release Date", "Duration (ms)", CoverColumn}
+	records := make([][]string, 0, len(tracks)+1)
+	records = append(records, header)
+	for _, t := range tracks {
+		row := []string{
+			t.URI,
+			t.Title,
+			t.Album,
+			t.Artists,
+			"",
+			strconv.Itoa(t.DurationMs),
+			t.Cover,
+		}
+		records = append(records, row)
+	}
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := w.WriteAll(records); err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o644)
+}
+
+// ArtistRecord is an artist saved to the local library.
+type ArtistRecord struct {
+	URI        string `json:"uri"`
+	Name       string `json:"name"`
+	Thumbnail  string `json:"thumbnail"`
+	FollowedAt string `json:"followedAt"`
+}
+
+// ReadArtists reads followed artists from path.
+func ReadArtists(path string) ([]ArtistRecord, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	r := csv.NewReader(bytes.NewReader(data))
+	r.FieldsPerRecord = -1
+	r.LazyQuotes = true
+	records, err := r.ReadAll()
+	if err != nil || len(records) <= 1 {
+		return nil, err
+	}
+	header := records[0]
+	cols := map[string]int{}
+	for i, name := range header {
+		cols[strings.TrimPrefix(strings.TrimSpace(name), "\uFEFF")] = i
+	}
+	uriCol, hasURI := cols["Artist URI"]
+	nameCol, hasName := cols["Artist Name"]
+	thumbCol, hasThumb := cols["Thumbnail URL"]
+	timeCol, hasTime := cols["Followed At"]
+
+	var artists []ArtistRecord
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		name := ""
+		if hasName {
+			name = field(row, nameCol)
+		}
+		if name == "" {
+			continue
+		}
+		var a ArtistRecord
+		a.Name = name
+		if hasURI {
+			a.URI = field(row, uriCol)
+		}
+		if hasThumb {
+			a.Thumbnail = field(row, thumbCol)
+		}
+		if hasTime {
+			a.FollowedAt = field(row, timeCol)
+		}
+		artists = append(artists, a)
+	}
+	return artists, nil
+}
+
+// AppendArtist appends an artist to path.
+func AppendArtist(path string, artist ArtistRecord) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	existing, _ := ReadArtists(path)
+	for _, a := range existing {
+		if (artist.URI != "" && a.URI == artist.URI) || strings.EqualFold(a.Name, artist.Name) {
+			return nil
+		}
+	}
+	existing = append(existing, artist)
+	return writeArtists(path, existing)
+}
+
+// RemoveArtist removes an artist from path.
+func RemoveArtist(path string, name, uri string) error {
+	existing, err := ReadArtists(path)
+	if err != nil || len(existing) == 0 {
+		return err
+	}
+	out := existing[:0]
+	for _, a := range existing {
+		match := (uri != "" && a.URI == uri) || strings.EqualFold(a.Name, name)
+		if !match {
+			out = append(out, a)
+		}
+	}
+	return writeArtists(path, out)
+}
+
+func writeArtists(path string, artists []ArtistRecord) error {
+	header := []string{"Artist URI", "Artist Name", "Thumbnail URL", "Followed At"}
+	records := make([][]string, 0, len(artists)+1)
+	records = append(records, header)
+	for _, a := range artists {
+		records = append(records, []string{a.URI, a.Name, a.Thumbnail, a.FollowedAt})
+	}
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := w.WriteAll(records); err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o644)
 }
 
 func parseFile(path string) ([]Track, error) {

@@ -117,3 +117,120 @@ func TestPickPrefersTheSongOverAVideo(t *testing.T) {
 		t.Fatalf("clock = %s", ParseClock("1:02:03"))
 	}
 }
+
+func TestAppendAndRemoveTrack(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "Liked_Songs.csv")
+	track1 := Track{
+		URI:        "spotify:track:123",
+		Title:      "First Song",
+		Artists:    "First Artist",
+		Album:      "First Album",
+		DurationMs: 180000,
+		Cover:      "https://example.com/cover1.jpg",
+	}
+	track2 := Track{
+		URI:        "youtube:track:vid-456",
+		Title:      "Second Song",
+		Artists:    "Second Artist",
+		Album:      "Second Album",
+		DurationMs: 200000,
+		Cover:      "https://example.com/cover2.jpg",
+	}
+	if err := AppendTrack(csvPath, track1); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendTrack(csvPath, track2); err != nil {
+		t.Fatal(err)
+	}
+	// duplicate append should no-op
+	if err := AppendTrack(csvPath, track1); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseFile(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 2 {
+		t.Fatalf("expected 2 tracks, got %d", len(parsed))
+	}
+	if parsed[0].Title != "First Song" || parsed[1].Title != "Second Song" {
+		t.Fatalf("unexpected tracks: %#v", parsed)
+	}
+
+	// Remove track1
+	if err := RemoveTrack(csvPath, track1.URI, track1.Title, track1.Artists); err != nil {
+		t.Fatal(err)
+	}
+	afterRemove, err := parseFile(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterRemove) != 1 || afterRemove[0].Title != "Second Song" {
+		t.Fatalf("expected 1 track remaining, got %#v", afterRemove)
+	}
+}
+
+func TestWritePlaylist(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "New_Playlist.csv")
+	tracks := []Track{
+		{URI: "spotify:track:a", Title: "Song A", Artists: "Artist A", DurationMs: 120000},
+		{URI: "spotify:track:b", Title: "Song B", Artists: "Artist B", DurationMs: 150000},
+	}
+	if err := WritePlaylist(csvPath, tracks); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseFile(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Title != "Song A" || got[1].Title != "Song B" {
+		t.Fatalf("unexpected parsed playlist: %#v", got)
+	}
+}
+
+func TestArtistSaveAndRemove(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "Followed_Artists.csv")
+	artist1 := ArtistRecord{
+		URI:        "artist-1",
+		Name:       "Test Band",
+		Thumbnail:  "https://example.com/art.jpg",
+		FollowedAt: "2026-11-06T12:00:00Z",
+	}
+	if err := AppendArtist(csvPath, artist1); err != nil {
+		t.Fatal(err)
+	}
+	// duplicate
+	if err := AppendArtist(csvPath, artist1); err != nil {
+		t.Fatal(err)
+	}
+	list, err := ReadArtists(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Name != "Test Band" {
+		t.Fatalf("expected 1 artist, got %#v", list)
+	}
+	if err := RemoveArtist(csvPath, "Test Band", "artist-1"); err != nil {
+		t.Fatal(err)
+	}
+	listAfter, err := ReadArtists(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listAfter) != 0 {
+		t.Fatalf("expected 0 artists after remove, got %#v", listAfter)
+	}
+}
+
+func TestSanitizeFileName(t *testing.T) {
+	if got := SanitizeFileName("Rock / Pop: Hits *2026*?"); got != "Rock _ Pop_ Hits _2026" {
+		t.Fatalf("unexpected sanitize: %q", got)
+	}
+	if got := SanitizeFileName("   "); got != "Untitled" {
+		t.Fatalf("unexpected sanitize blank: %q", got)
+	}
+}
+

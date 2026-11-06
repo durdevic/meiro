@@ -108,6 +108,28 @@ func (a *app) cardMenu(c *ui.Context, anchor ui.Element, key string, item youtub
 			a.startRadio(item, key)
 			close()
 		}
+		if target.Kind == youtube.TargetPlaylist || target.Kind == youtube.TargetAlbum {
+			_, saved := a.isLocalPlaylistSaved(item.Title)
+			saveLabel, saveIcon := "Save to local library", m3.IconAdd
+			if saved {
+				saveLabel, saveIcon = "Remove from local library", m3.IconDelete
+			}
+			if m3.MenuItem(c, saveLabel, saveIcon).Clicked() {
+				a.toggleLocalSavePlaylist(item.Title)
+				close()
+			}
+		}
+		if target.Kind == youtube.TargetArtist {
+			saved := a.isLocalArtistSaved(item.Title, target.ID)
+			saveLabel, saveIcon := "Follow artist", m3.IconAdd
+			if saved {
+				saveLabel, saveIcon = "Unfollow artist", m3.IconCheck
+			}
+			if m3.MenuItem(c, saveLabel, saveIcon).Clicked() {
+				a.toggleLocalSaveArtist(item.Title, target.ID, item.Thumbnail)
+				close()
+			}
+		}
 		if (target.Kind == youtube.TargetAlbum || target.Kind == youtube.TargetPlaylist) && a.downloads.dir != "" {
 			if _, _, saved, _ := a.collectionDownload(target.ID); saved {
 				if m3.MenuItem(c, "Remove download", m3.IconDelete).Clicked() {
@@ -173,6 +195,15 @@ func (a *app) songMenu(c *ui.Context, anchor ui.Element, key string, item youtub
 				a.toggleRating(item, youtube.Disliked)
 				close()
 			}
+		}
+		localSaved := a.isLocalSongSaved(item)
+		localLabel, localIcon := "Save to library", m3.IconAdd
+		if localSaved {
+			localLabel, localIcon = "Remove from library", m3.IconCheck
+		}
+		if entry(localLabel, localIcon).Clicked() {
+			a.toggleLocalSaveSong(item)
+			close()
 		}
 		if entry("Start radio", m3.IconShuffle).Clicked() {
 			a.startRadio(item, key)

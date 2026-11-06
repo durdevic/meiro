@@ -55,6 +55,11 @@ type spotifyState struct {
 	finding    bool
 	waiting    bool
 	playlistID string
+
+	likedTracks    map[string]bool
+	followedLoaded bool
+	followedMap    map[string]bool
+	followedList   []spotifyimport.ArtistRecord
 }
 
 func (a *app) openSpotifyLibrary(file string) {
@@ -94,6 +99,355 @@ func (a *app) ensureSpotify() {
 	a.spotify.ready = true
 	if a.spotify.folder == "" {
 		a.spotify.folder = defaultSpotifyFolder
+	}
+}
+
+func (a *app) spotifyDir() string {
+	a.ensureSpotify()
+	if a.spotify.lib.Source != "" {
+		if info, err := os.Stat(a.spotify.lib.Source); err == nil && info.IsDir() {
+			return a.spotify.lib.Source
+		}
+	}
+	if a.spotify.folder != "" {
+		if info, err := os.Stat(a.spotify.folder); err == nil && info.IsDir() {
+			return a.spotify.folder
+		}
+	}
+	if a.spotify.home != "" {
+		_ = os.MkdirAll(a.spotify.home, 0o700)
+		return a.spotify.home
+	}
+	if a.spotify.folder != "" {
+		_ = os.MkdirAll(a.spotify.folder, 0o700)
+		return a.spotify.folder
+	}
+	return defaultSpotifyFolder
+}
+
+func (a *app) rebuildSpotifyLikes() {
+	liked := make(map[string]bool)
+	for _, pl := range a.spotify.lib.Playlists {
+		if strings.EqualFold(pl.File, "Liked_Songs.csv") || strings.EqualFold(pl.Name, "Liked Songs") {
+			for _, t := range pl.Tracks {
+				if t.URI != "" {
+					liked["uri:"+t.URI] = true
+				}
+				if t.VideoID != "" {
+					liked["vid:"+t.VideoID] = true
+					liked["uri:youtube:track:"+t.VideoID] = true
+				}
+				title := strings.ToLower(strings.TrimSpace(t.Title))
+				first := strings.ToLower(strings.TrimSpace(spotifyimport.FirstArtist(t.Artists)))
+				all := strings.ToLower(strings.TrimSpace(t.Artists))
+				if title != "" {
+					if first != "" {
+						liked["song:"+title+"|"+first] = true
+					}
+					if all != "" {
+						liked["song:"+title+"|"+all] = true
+					}
+				}
+			}
+			break
+		}
+	}
+	a.spotify.likedTracks = liked
+}
+
+func (a *app) ensureSpotifyLikes() {
+	a.ensureSpotify()
+	if a.spotify.likedTracks == nil {
+		a.rebuildSpotifyLikes()
+	}
+}
+
+func (a *app) isLocalSongSaved(item youtube.MusicItem) bool {
+	a.ensureSpotifyLikes()
+	if item.ID != "" && a.spotify.likedTracks["uri:"+item.ID] {
+		return true
+	}
+	if item.VideoID != "" {
+		if a.spotify.likedTracks["vid:"+item.VideoID] || a.spotify.likedTracks["uri:youtube:track:"+item.VideoID] {
+			return true
+		}
+	}
+	title := strings.ToLower(strings.TrimSpace(item.Title))
+	if title == "" {
+		return false
+	}
+	first := strings.ToLower(strings.TrimSpace(spotifyimport.FirstArtist(firstNonEmpty(item.Artists, item.Artist))))
+	all := strings.ToLower(strings.TrimSpace(firstNonEmpty(item.Artists, item.Artist)))
+	if first != "" && a.spotify.likedTracks["song:"+title+"|"+first] {
+		return true
+	}
+	if all != "" && a.spotify.likedTracks["song:"+title+"|"+all] {
+		return true
+	}
+	return false
+}
+
+func (a *app) isSpotifyTrackSaved(track spotifyimport.Track) bool {
+	a.ensureSpotifyLikes()
+	if track.URI != "" && a.spotify.likedTracks["uri:"+track.URI] {
+		return true
+	}
+	if track.VideoID != "" {
+		if a.spotify.likedTracks["vid:"+track.VideoID] || a.spotify.likedTracks["uri:youtube:track:"+track.VideoID] {
+			return true
+		}
+	}
+	title := strings.ToLower(strings.TrimSpace(track.Title))
+	if title == "" {
+		return false
+	}
+	first := strings.ToLower(strings.TrimSpace(spotifyimport.FirstArtist(track.Artists)))
+	all := strings.ToLower(strings.TrimSpace(track.Artists))
+	if first != "" && a.spotify.likedTracks["song:"+title+"|"+first] {
+		return true
+	}
+	if all != "" && a.spotify.likedTracks["song:"+title+"|"+all] {
+		return true
+	}
+	return false
+}
+
+func (a *app) toggleLocalSaveSong(item youtube.MusicItem) {
+	saved := a.isLocalSongSaved(item)
+	dir := a.spotifyDir()
+	csvPath := filepath.Join(dir, "Liked_Songs.csv")
+
+	uri := item.ID
+	if uri == "" || !strings.HasPrefix(uri, "spotify:") {
+		uri = "youtube:track:" + item.VideoID
+	}
+	durMs := int(spotifyimport.ParseClock(item.Duration).Milliseconds())
+	track := spotifyimport.Track{
+		URI:        uri,
+		Title:      item.Title,
+		Artists:    firstNonEmpty(item.Artists, item.Artist),
+		Album:      item.Album,
+		DurationMs: durMs,
+		VideoID:    item.VideoID,
+		Cover:      item.Thumbnail,
+	}
+
+	if saved {
+		if err := spotifyimport.RemoveTrack(csvPath, track.URI, track.Title, track.Artists); err != nil {
+			a.notice = "Could not update Liked Songs: " + firstLine(err.Error())
+			return
+		}
+		a.spotify.lib.RemoveTrack("Liked_Songs.csv", track.URI, track.Title, track.Artists)
+		a.rebuildSpotifyLikes()
+		a.saveSpotify()
+		a.notice = "Removed “" + item.Title + "” from Liked Songs"
+	} else {
+		if err := spotifyimport.AppendTrack(csvPath, track); err != nil {
+			a.notice = "Could not save to Liked Songs: " + firstLine(err.Error())
+			return
+		}
+		a.spotify.lib.AddTrack("Liked_Songs.csv", "Liked Songs", track)
+		a.rebuildSpotifyLikes()
+		a.saveSpotify()
+		a.notice = "Saved “" + item.Title + "” to Liked Songs"
+	}
+}
+
+func (a *app) toggleSpotifySaveTrack(track spotifyimport.Track) {
+	saved := a.isSpotifyTrackSaved(track)
+	dir := a.spotifyDir()
+	csvPath := filepath.Join(dir, "Liked_Songs.csv")
+
+	if saved {
+		if err := spotifyimport.RemoveTrack(csvPath, track.URI, track.Title, track.Artists); err != nil {
+			a.notice = "Could not update Liked Songs: " + firstLine(err.Error())
+			return
+		}
+		a.spotify.lib.RemoveTrack("Liked_Songs.csv", track.URI, track.Title, track.Artists)
+		a.rebuildSpotifyLikes()
+		a.saveSpotify()
+		a.notice = "Removed “" + track.Title + "” from Liked Songs"
+	} else {
+		if err := spotifyimport.AppendTrack(csvPath, track); err != nil {
+			a.notice = "Could not save to Liked Songs: " + firstLine(err.Error())
+			return
+		}
+		a.spotify.lib.AddTrack("Liked_Songs.csv", "Liked Songs", track)
+		a.rebuildSpotifyLikes()
+		a.saveSpotify()
+		a.notice = "Saved “" + track.Title + "” to Liked Songs"
+	}
+}
+
+func (a *app) rebuildFollowedArtists() {
+	dir := a.spotifyDir()
+	csvPath := filepath.Join(dir, "Followed_Artists.csv")
+	artists, _ := spotifyimport.ReadArtists(csvPath)
+	followed := make(map[string]bool, len(artists)*2)
+	for _, art := range artists {
+		if art.URI != "" {
+			followed["id:"+art.URI] = true
+		}
+		if art.Name != "" {
+			followed["name:"+strings.ToLower(strings.TrimSpace(art.Name))] = true
+		}
+	}
+	a.spotify.followedMap = followed
+	a.spotify.followedList = artists
+	a.spotify.followedLoaded = true
+}
+
+func (a *app) ensureFollowedArtists() {
+	if !a.spotify.followedLoaded {
+		a.rebuildFollowedArtists()
+	}
+}
+
+func (a *app) isLocalArtistSaved(name, id string) bool {
+	a.ensureFollowedArtists()
+	if id != "" && a.spotify.followedMap["id:"+id] {
+		return true
+	}
+	norm := strings.ToLower(strings.TrimSpace(name))
+	return a.spotify.followedMap["name:"+norm]
+}
+
+func (a *app) toggleLocalSaveArtist(name, id, thumbnail string) {
+	saved := a.isLocalArtistSaved(name, id)
+	dir := a.spotifyDir()
+	csvPath := filepath.Join(dir, "Followed_Artists.csv")
+
+	record := spotifyimport.ArtistRecord{
+		URI:        id,
+		Name:       name,
+		Thumbnail:  thumbnail,
+		FollowedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if saved {
+		if err := spotifyimport.RemoveArtist(csvPath, name, id); err != nil {
+			a.notice = "Could not update followed artists: " + firstLine(err.Error())
+			return
+		}
+		a.rebuildFollowedArtists()
+		a.notice = "Removed “" + name + "” from followed artists"
+	} else {
+		if err := spotifyimport.AppendArtist(csvPath, record); err != nil {
+			a.notice = "Could not follow artist: " + firstLine(err.Error())
+			return
+		}
+		a.rebuildFollowedArtists()
+		a.notice = "Saved “" + name + "” to followed artists"
+	}
+}
+
+func (a *app) isLocalPlaylistSaved(title string) (string, bool) {
+	a.ensureSpotify()
+	norm := strings.ToLower(strings.TrimSpace(title))
+	if norm == "" {
+		return "", false
+	}
+	for _, pl := range a.spotify.lib.Playlists {
+		if strings.ToLower(strings.TrimSpace(pl.Name)) == norm {
+			return pl.ID, true
+		}
+		base := strings.ToLower(strings.TrimSuffix(pl.File, filepath.Ext(pl.File)))
+		if base == norm || strings.ReplaceAll(base, "_", " ") == norm {
+			return pl.ID, true
+		}
+	}
+	return "", false
+}
+
+func (a *app) toggleLocalSavePlaylist(title string) {
+	plID, saved := a.isLocalPlaylistSaved(title)
+	dir := a.spotifyDir()
+	cleanName := spotifyimport.SanitizeFileName(title)
+	if cleanName == "" {
+		cleanName = "Untitled_Playlist"
+	}
+	filename := cleanName + ".csv"
+	csvPath := filepath.Join(dir, filename)
+
+	if saved {
+		_ = os.Remove(csvPath)
+		a.spotify.lib.RemovePlaylistByID(plID)
+		a.saveSpotify()
+		a.notice = "Removed “" + title + "” from local library"
+	} else {
+		tracks := a.page.playable
+		if len(tracks) == 0 {
+			tracks = pageTracks(a.page.feed)
+		}
+		if len(tracks) == 0 {
+			a.notice = "No tracks to save in “" + title + "”"
+			return
+		}
+		spotifyTracks := make([]spotifyimport.Track, len(tracks))
+		for i, t := range tracks {
+			uri := t.ID
+			if uri == "" || !strings.HasPrefix(uri, "spotify:") {
+				uri = "youtube:track:" + t.VideoID
+			}
+			spotifyTracks[i] = spotifyimport.Track{
+				URI:        uri,
+				Title:      t.Title,
+				Artists:    firstNonEmpty(t.Artists, t.Artist),
+				Album:      firstNonEmpty(t.Album, title),
+				DurationMs: int(spotifyimport.ParseClock(t.Duration).Milliseconds()),
+				VideoID:    t.VideoID,
+				Cover:      t.Thumbnail,
+			}
+		}
+		if err := spotifyimport.WritePlaylist(csvPath, spotifyTracks); err != nil {
+			a.notice = "Could not save playlist: " + firstLine(err.Error())
+			return
+		}
+		used := a.spotify.lib.UsedIDs()
+		newPL := spotifyimport.Playlist{
+			ID:     spotifyimport.PlaylistID(filename, used),
+			Name:   title,
+			File:   filename,
+			Tracks: spotifyTracks,
+		}
+		a.spotify.lib.Playlists = append(a.spotify.lib.Playlists, newPL)
+		a.saveSpotify()
+		a.notice = "Saved “" + title + "” to local library as CSV"
+	}
+}
+
+func (a *app) localSavePlaylistButton(c *ui.Context) {
+	title := a.page.detail.title
+	if title == "" {
+		return
+	}
+	_, saved := a.isLocalPlaylistSaved(title)
+	label, icon, kind := "Save", m3.IconAdd, m3.Tonal
+	if saved {
+		label, icon, kind = "Saved", m3.IconCheck, m3.Outlined
+	}
+	if m3.Button(c, m3.ButtonSpec{
+		Label: label, Icon: icon, Kind: kind, Size: a.heroButtonSize(), Key: "hero-local-save",
+	}).Clicked() {
+		a.toggleLocalSavePlaylist(title)
+	}
+}
+
+func (a *app) localSaveArtistButton(c *ui.Context) {
+	name := a.page.detail.title
+	if name == "" {
+		return
+	}
+	_, id := a.route()
+	saved := a.isLocalArtistSaved(name, id)
+	label, icon, kind := "Follow", m3.IconAdd, m3.Tonal
+	if saved {
+		label, icon, kind = "Following", m3.IconCheck, m3.Outlined
+	}
+	if m3.Button(c, m3.ButtonSpec{
+		Label: label, Icon: icon, Kind: kind, Size: a.heroButtonSize(), Key: "hero-local-follow",
+	}).Clicked() {
+		a.toggleLocalSaveArtist(name, id, a.page.detail.art)
 	}
 }
 
@@ -548,6 +902,16 @@ func (a *app) spotifyPlaylistPage(c *ui.Context) {
 			}).Clicked() {
 				a.playSpotify(id, 0)
 			}
+			if m3.Button(c, m3.ButtonSpec{
+				Label: "Shuffle", Icon: m3.IconShuffle, Kind: m3.Tonal, Size: m3.Small40, Key: "spotify-shuffle",
+				Disabled: len(playlist.Tracks) == 0,
+			}).Clicked() {
+				a.playSpotify(id, 0)
+				a.setShuffle(true)
+			}
+			m3.Button(c, m3.ButtonSpec{
+				Label: "Saved", Icon: m3.IconCheck, Kind: m3.Outlined, Size: m3.Small40, Key: "spotify-saved-badge",
+			})
 		})
 		ui.Row(c).Shrink(0).Height(48).Padding(0, pageGutter, 8).Children(func() {
 			m3.SearchBar(c, m3.SearchSpec{
@@ -653,6 +1017,24 @@ func (a *app) spotifyTrackRow(c *ui.Context, playlistID string, row spotifyTrack
 				m3.BodyMedium.Style(ui.Text(c, length), false).TextColor(sub).Shrink(0)
 			}
 		})
+		saved := a.isSpotifyTrackSaved(track)
+		saveIcon := m3.IconAdd
+		saveLabel := "Save " + track.Title + " to Liked Songs"
+		if saved {
+			saveIcon = m3.IconCheck
+			saveLabel = "Remove " + track.Title + " from Liked Songs"
+		}
+		saveBtn := m3.IconButton(c, m3.IconButtonSpec{
+			Icon: saveIcon, Label: saveLabel, Key: key + "-save",
+		})
+		if saved {
+			saveBtn.TextColor(sc.Primary)
+		} else if !line.Hovered() && !saveBtn.FocusVisible() {
+			saveBtn.Opacity(0).PassThrough()
+		}
+		if saveBtn.Clicked() {
+			a.toggleSpotifySaveTrack(track)
+		}
 	})
 	fill := ui.Transparent
 	if playing {
