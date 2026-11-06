@@ -17,3 +17,4 @@ mygo_windows_*.syso
 website/.wrangler/
 
 website/node_modules/
+/skills/
